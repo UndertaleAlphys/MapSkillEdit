@@ -3,9 +3,12 @@
 
 use std::{f32::consts::PI, num::NonZero};
 
-use engage::gamedata::{skill::SkillData, unit::Unit};
+use engage::{
+    gamedata::{skill::SkillData, unit::Unit},
+    map::image::MapImage,
+};
 use skyline::hooks::InlineCtx;
-use unity::prelude::OptionalMethod;
+use unity::{prelude::OptionalMethod, system::Il2CppString};
 // / This is called a proc(edural) macro. You use this to indicate that a function will be used as a hook.
 // /
 // / Pay attention to the argument, offset.
@@ -23,16 +26,16 @@ got the registers we want in ClassChangeCheck().
 
 #[unity::class("App", "MapSkill_Result")]
 pub struct MapSkillResult {
-    pub moved: bool,
-    pub unit: *mut Unit,
-    pub x: i32,
-    pub z: i32,
+    // pub moved: bool,
+    // pub unit: *mut Unit,
+    // pub x: i32,
+    // pub z: i32,
 }
 trait MapSkillResultTrait {
     fn set_moved(&mut self, moved: bool);
     fn get_moved(&self) -> bool;
-    fn set_unit(&mut self, unit: Option<&Unit>);
-    fn get_unit(&self) -> Option<&Unit>;
+    fn set_unit(&mut self, unit: &Unit);
+    fn get_unit(&self) -> Option<&'static mut Unit>;
     fn set_x(&mut self, x: i32);
     fn get_x(&self) -> i32;
     fn set_z(&mut self, z: i32);
@@ -48,19 +51,17 @@ impl MapSkillResultTrait for MapSkillResult {
         let p_moved = self as *const MapSkillResult as *const bool;
         unsafe { *p_moved }
     }
-    fn set_unit(&mut self, unit: Option<&Unit>) {
-        if let Some(unit) = unit {
-            let pp_unit = self as *mut MapSkillResult as *mut *const Unit;
-            unsafe { *pp_unit.byte_add(0x8) = unit as *const Unit }
-        }
+    fn set_unit(&mut self, unit: &Unit) {
+        let pp_unit = self as *mut MapSkillResult as *mut *const Unit;
+        unsafe { *pp_unit.byte_add(0x8) = unit as *const Unit }
     }
-    fn get_unit(&self) -> Option<&Unit> {
-        let pp_unit = self as *const MapSkillResult as *const *const Unit;
+    fn get_unit(&self) -> Option<&'static mut Unit> {
+        let pp_unit = self as *const MapSkillResult as *const *mut Unit;
         let p_unit = unsafe { *pp_unit.byte_add(0x8) };
         if p_unit.is_null() {
             None
         } else {
-            unsafe { Some(&*p_unit) }
+            unsafe { Some(&mut *p_unit) }
         }
     }
     fn set_x(&mut self, x: i32) {
@@ -83,18 +84,18 @@ impl MapSkillResultTrait for MapSkillResult {
 
 #[unity::class("App", "MapSkill_Results")]
 pub struct MapSkillResults {
-    pub skill: *mut SkillData,
-    pub current: *mut MapSkillResult,
-    pub reverse: *mut MapSkillResult,
+    // pub skill: *mut SkillData,
+    // pub current: *mut MapSkillResult,
+    // pub reverse: *mut MapSkillResult,
 }
 
 trait MapSkillResultsTrait {
     fn set_skill(&mut self, skill: &SkillData);
-    fn get_skill(&self) -> Option<&SkillData>;
+    fn get_skill(&self) -> Option<&'static mut SkillData>;
     fn set_current(&mut self, current: &MapSkillResult);
-    fn get_current(&self) -> &MapSkillResult;
+    fn get_current(&self) -> &'static mut MapSkillResult;
     fn set_reverse(&mut self, current: &MapSkillResult);
-    fn get_reverse(&self) -> &MapSkillResult;
+    fn get_reverse(&self) -> &'static mut MapSkillResult;
 }
 
 impl MapSkillResultsTrait for MapSkillResults {
@@ -102,13 +103,13 @@ impl MapSkillResultsTrait for MapSkillResults {
         let pp_skill = self as *mut MapSkillResults as *mut *const SkillData;
         unsafe { *pp_skill = skill as *const SkillData }
     }
-    fn get_skill(&self) -> Option<&SkillData> {
-        let pp_skill = self as *const MapSkillResults as *const *const SkillData;
+    fn get_skill(&self) -> Option<&'static mut SkillData> {
+        let pp_skill = self as *const MapSkillResults as *const *mut SkillData;
         let p_skill = unsafe { *pp_skill };
         if p_skill.is_null() {
             None
         } else {
-            unsafe { Some(&*p_skill) }
+            unsafe { Some(&mut *p_skill) }
         }
     }
     fn set_current(&mut self, current: &MapSkillResult) {
@@ -128,9 +129,9 @@ impl MapSkillResultsTrait for MapSkillResults {
             *p_z = current.get_z();
         }
     }
-    fn get_current(&self) -> &MapSkillResult {
-        let p_result = self as *const MapSkillResults as *const MapSkillResult;
-        unsafe { &*p_result.byte_add(0x8) }
+    fn get_current(&self) -> &'static mut MapSkillResult {
+        let p_result = self as *const MapSkillResults as *mut MapSkillResult;
+        unsafe { &mut *p_result.byte_add(0x8) }
     }
 
     fn set_reverse(&mut self, reverse: &MapSkillResult) {
@@ -150,47 +151,133 @@ impl MapSkillResultsTrait for MapSkillResults {
             *p_z = reverse.get_z();
         }
     }
-    fn get_reverse(&self) -> &MapSkillResult {
-        let p_result = self as *const MapSkillResults as *const MapSkillResult;
-        unsafe { &*p_result.byte_add(0x20) }
+    fn get_reverse(&self) -> &'static mut MapSkillResult {
+        let p_result = self as *const MapSkillResults as *mut MapSkillResult;
+        unsafe { &mut *p_result.byte_add(0x20) }
     }
 }
 
-unsafe fn map_skill_prediction_get_results(ctx: &InlineCtx) -> &MapSkillResults {
+trait SkillDataTrait {
+    fn get_move_self(&self) -> i32;
+    fn get_move_target(&self) -> i32;
+    fn is_before_move(&self) -> bool;
+}
+
+impl SkillDataTrait for SkillData {
+    fn get_move_self(&self) -> i32 {
+        unsafe {
+            let p_i32 = self as *const SkillData as *const i32;
+            *p_i32.byte_add(0x200)
+        }
+    }
+    fn get_move_target(&self) -> i32 {
+        unsafe {
+            let p_i32 = self as *const SkillData as *const i32;
+            *p_i32.byte_add(0x204)
+        }
+    }
+    fn is_before_move(&self) -> bool {
+        const BEFORE_MOVE: i64 = 0x4000000;
+        self.get_flag() & BEFORE_MOVE != 0
+    }
+}
+fn map_skill_get_results(ctx: &InlineCtx) -> &'static MapSkillResults {
+    // x24
     unsafe { &*(*ctx.registers[24].x.as_ref() as *const MapSkillResults) }
 }
 
-fn print_unit_status(unit: &Unit) {
-    println!(
-        "Name: {}",
-        unit.get_person()
-            .get_name()
-            .unwrap_or("None".into())
-            .to_string()
-    );
-    println!("X: {}; Z: {};", unit.get_x(), unit.get_z());
+fn map_skill_prediction_get_current(ctx: &InlineCtx) -> &'static Unit {
+    map_skill_get_results(ctx).get_current().get_unit().unwrap()
+}
+
+fn map_skill_prediction_get_reverse(ctx: &InlineCtx) -> &'static Unit {
+    map_skill_get_results(ctx).get_reverse().get_unit().unwrap()
+}
+
+fn map_skill_get_diff_x(ctx: &InlineCtx) -> i32 {
+    let current = map_skill_prediction_get_current(ctx);
+    let reverse = map_skill_prediction_get_reverse(ctx);
+    reverse.get_x() - current.get_x()
+}
+
+fn map_skill_get_diff_z(ctx: &InlineCtx) -> i32 {
+    let current = map_skill_prediction_get_current(ctx);
+    let reverse = map_skill_prediction_get_reverse(ctx);
+    reverse.get_z() - current.get_z()
+}
+
+fn map_skill_get_skill(ctx: &InlineCtx) -> &'static SkillData {
+    let map_skill_results = map_skill_get_results(ctx);
+    map_skill_results.get_skill().unwrap()
+}
+
+#[skyline::hook(offset = 0x23BC470, inline)]
+pub fn enable_resurrection_unit_move(ctx: &mut InlineCtx) {
+    unsafe { *ctx.registers[0].x.as_mut() = 0 }
+}
+
+#[skyline::hook(offset = 0x1F4E6F4, inline)]
+pub fn map_skill_disable_line_check(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    if !skill.is_before_move() {
+        unsafe { *ctx.registers[19].w.as_mut() = 0 };
+    }
+}
+
+#[skyline::hook(offset = 0x1F4E6F8, inline)]
+pub fn map_skill_disable_line_check_restore_w19(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    if !skill.is_before_move() {
+        let current = map_skill_get_diff_z(ctx);
+        unsafe { *ctx.registers[19].w.as_mut() = current as u32 };
+    }
+}
+
+#[skyline::hook(offset = 0x1F4E82C, inline)]
+pub fn map_skill_set_current_x(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    let diff_x = map_skill_get_diff_x(ctx);
+    if !skill.is_before_move() {
+        unsafe { *ctx.registers[20].w.as_mut() = diff_x as u32 }
+    }
+}
+
+#[skyline::hook(offset = 0x1F4E830, inline)]
+pub fn map_skill_set_current_z(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    let diff_z = map_skill_get_diff_z(ctx);
+    if !skill.is_before_move() {
+        unsafe { *ctx.registers[21].w.as_mut() = diff_z as u32 }
+    }
+}
+
+#[skyline::hook(offset = 0x1F4E900, inline)]
+pub fn map_skill_set_reverse_x(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    let diff_x = map_skill_get_diff_x(ctx);
+    if !skill.is_before_move() {
+        unsafe { *ctx.registers[20].w.as_mut() = diff_x as u32 }
+    }
+}
+
+#[skyline::hook(offset = 0x1F4E910, inline)]
+pub fn map_skill_set_reverse_z(ctx: &mut InlineCtx) {
+    let skill = map_skill_get_skill(ctx);
+    let diff_z = map_skill_get_diff_z(ctx);
+    if !skill.is_before_move() {
+        unsafe { *ctx.registers[21].w.as_mut() = diff_z as u32 }
+    }
 }
 
 #[skyline::hook(offset = 0x1F4E160)]
 pub fn map_skill_prediction(
-    current: &mut Unit,
-    reverse: &mut Unit,
+    current: &Unit,
+    reverse: &Unit,
     skill: &SkillData,
     results: &mut MapSkillResults,
     method: OptionalMethod,
 ) -> bool {
-    let result = call_original!(current, reverse, skill, results, method);
-    println!("Get current_result");
-    let current_r = results.get_current();
-    println!("Get current_unit");
-    let current_u = current_r.get_unit();
-    println!("Unwrap");
-    if current_u.is_some() {
-        println!("Is not none");
-        print_unit_status(current_u.unwrap());
-    }
-    // print_unit_status(results.get_reverse().unwrap().get_unit().unwrap());
-    result
+    call_original!(current, reverse, skill, results, method)
 }
 
 /// The internal name of your plugin. This will show up in crash logs. Make it 8 characters long at max.
@@ -233,5 +320,14 @@ pub fn main() {
     // Do keep in mind that hooks cannot currently be uninstalled, so proceed accordingly.
     //
     // A ``install_hooks!`` variant exists to let you install multiple hooks at once if separated by a comma.
-    skyline::install_hooks!(map_skill_prediction);
+    skyline::install_hooks!(
+        map_skill_prediction,
+        enable_resurrection_unit_move,
+        map_skill_disable_line_check,
+        map_skill_disable_line_check_restore_w19,
+        map_skill_set_current_x,
+        map_skill_set_reverse_x,
+        map_skill_set_current_z,
+        map_skill_set_reverse_z,
+    );
 }
